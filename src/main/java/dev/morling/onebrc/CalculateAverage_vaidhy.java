@@ -361,7 +361,7 @@ public class CalculateAverage_vaidhy<T> {
         long fileSize = diskFileService.length();
         long chunkSize = Math.ceilDiv(fileSize, proc);
         Map<EfficientString, IntSummaryStatistics> output = calculateAverageVaidhy.master(chunkSize,
-                Math.min(10 * 1024 * 1024, (int) chunkSize));
+                (int) Math.min(10 * 1024 * 1024, chunkSize));
         Map<String, String> outputStr = toPrintMap(output);
         System.out.println(outputStr);
     }

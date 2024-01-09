@@ -119,14 +119,7 @@ public class CalculateAverage_vaidhy<T> {
         }
 
         public byte next() {
-            if (hasNext()) {
-                byte ch = currentChunk[index];
-                index++;
-                return ch;
-            }
-            else {
-                throw new NoSuchElementException();
-            }
+            return currentChunk[index++];
         }
     }
 
@@ -155,22 +148,17 @@ public class CalculateAverage_vaidhy<T> {
 
         @Override
         public EfficientString next() {
-            if (hasNext()) {
-                byte[] line = new byte[128];
-                int i = 0;
-                while (byteStream.hasNext()) {
-                    byte ch = byteStream.next();
-                    readIndex++;
-                    if (ch == 0x0a) {
-                        break;
-                    }
-                    line[i++] = ch;
+            byte[] line = new byte[128];
+            int i = 0;
+            while (byteStream.hasNext()) {
+                byte ch = byteStream.next();
+                readIndex++;
+                if (ch == 0x0a) {
+                    break;
                 }
-                return new EfficientString(line, i);
+                line[i++] = ch;
             }
-            else {
-                throw new NoSuchElementException();
-            }
+            return new EfficientString(line, i);
         }
     }
 

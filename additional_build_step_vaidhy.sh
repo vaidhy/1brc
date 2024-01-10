@@ -17,5 +17,5 @@
 
 source "$HOME/.sdkman/bin/sdkman-init.sh"
 sdk use java 21.0.1-graal 1>&2
-NATIVE_IMAGE_OPTS="-O2 -march=native --enable-preview -Djava.util.concurrent.ForkJoinPool.common.parallelism=16"
+NATIVE_IMAGE_OPTS="-O3 -march=native --enable-preview"
 native-image $NATIVE_IMAGE_OPTS -cp target/average-1.0.0-SNAPSHOT.jar -o image_calculateaverage_vaidhy dev.morling.onebrc.CalculateAverage_vaidhy

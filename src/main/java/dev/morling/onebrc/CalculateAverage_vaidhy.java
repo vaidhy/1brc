@@ -19,16 +19,13 @@ import sun.misc.Unsafe;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
 import java.lang.reflect.Field;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinTask;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -54,11 +51,11 @@ public class CalculateAverage_vaidhy<T> {
     private final Supplier<MapReduce<T>> chunkProcessCreator;
     private final Function<List<T>, T> reducer;
 
-    interface MapReduce<T> extends Consumer<EfficientString> {
+    public interface MapReduce<T> extends Consumer<EfficientString> {
         T result();
     }
 
-    interface FileService {
+    public interface FileService {
         long length();
 
         byte getByte(long position);
@@ -168,16 +165,15 @@ public class CalculateAverage_vaidhy<T> {
 
     // Space complexity: O(number of workers), not counting
     // workers space assuming they are running in different hosts.
-    public T master(long chunkSize) {
+    public T master(long chunkSize, ExecutorService executor) {
         long len = fileService.length();
-        List<ForkJoinTask<T>> summaries = new ArrayList<>();
-        ForkJoinPool commonPool = ForkJoinPool.commonPool();
+        List<Future<T>> summaries = new ArrayList<>();
 
         for (long offset = 0; offset < len; offset += chunkSize) {
             long workerLength = Math.min(len, offset + chunkSize) - offset;
             MapReduce<T> mr = chunkProcessCreator.get();
             final long transferOffset = offset;
-            ForkJoinTask<T> task = commonPool.submit(() -> {
+            Future<T> task = executor.submit(() -> {
                 worker(transferOffset, workerLength, mr);
                 return mr.result();
             });
@@ -226,7 +222,7 @@ public class CalculateAverage_vaidhy<T> {
         }
     }
 
-    record EfficientString(byte[] arr, int length) {
+    public record EfficientString(byte[] arr, int length) {
 
         @Override
         public int hashCode() {
@@ -330,10 +326,17 @@ public class CalculateAverage_vaidhy<T> {
                 ChunkProcessorImpl::new,
                 CalculateAverage_vaidhy::combineOutputs);
 
-        int proc = ForkJoinPool.commonPool().getParallelism();
+        int proc = Runtime.getRuntime().availableProcessors();
+        int shards = proc;
         long fileSize = diskFileService.length();
-        long chunkSize = Math.ceilDiv(fileSize, proc);
-        Map<EfficientString, IntSummaryStatistics> output = calculateAverageVaidhy.master(chunkSize);
+        long chunkSize = Math.ceilDiv(fileSize, shards);
+
+        Map<EfficientString, IntSummaryStatistics> output;
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(proc)) {
+            output = calculateAverageVaidhy.master(chunkSize, executor);
+        }
+
         Map<String, String> outputStr = toPrintMap(output);
         System.out.println(outputStr);
     }

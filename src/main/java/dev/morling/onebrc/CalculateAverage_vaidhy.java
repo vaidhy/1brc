@@ -133,12 +133,12 @@ public class CalculateAverage_vaidhy<T> {
             int i = 0;
             while (byteStream.hasNext()) {
                 byte ch = byteStream.next();
-                readIndex++;
                 if (ch == 0x0a) {
                     break;
                 }
                 line[i++] = ch;
             }
+            readIndex += (i + 1);
             return new EfficientString(line, i);
         }
     }

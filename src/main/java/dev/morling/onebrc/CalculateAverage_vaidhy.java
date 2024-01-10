@@ -17,15 +17,14 @@ package dev.morling.onebrc;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinTask;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -38,11 +37,11 @@ public class CalculateAverage_vaidhy<T> {
     private final Supplier<MapReduce<T>> chunkProcessCreator;
     private final Function<List<T>, T> reducer;
 
-    interface MapReduce<T> extends Consumer<EfficientString> {
+    public interface MapReduce<T> extends Consumer<EfficientString> {
         T result();
     }
 
-    interface FileService {
+    public interface FileService {
         /**
          * Returns the size of the file in number of characters.
          * (Extra credit: assume byte size instead of char size)
@@ -59,7 +58,7 @@ public class CalculateAverage_vaidhy<T> {
         // Possible implementation for byte case in HTTP:
         // Using Http Request header "Range", typically used for continuing
         // partial downloads.
-        byte[] range(long offset, int length);
+        int read(ByteBuffer dst, long position);
     }
 
     public CalculateAverage_vaidhy(FileService fileService,
@@ -70,12 +69,10 @@ public class CalculateAverage_vaidhy<T> {
         this.reducer = reducer;
     }
 
-    /// SAMPLE CANDIDATE CODE STARTS
-
     /**
      * Reads from a given offset till the end, it calls server in
      * blocks of scanSize whenever cursor passes the current block.
-     * Typically when hasNext() is called. hasNext() is efficient
+     * Typically, when hasNext() is called. hasNext() is efficient
      * in the sense calling second time is cheap if next() is not
      * called in between. Cheap in the sense no call to server is
      * made.
@@ -85,15 +82,13 @@ public class CalculateAverage_vaidhy<T> {
 
         private final FileService fileService;
         private long offset;
-        private final long scanSize;
-        private int index = 0;
-        private byte[] currentChunk = new byte[0];
         private final long fileLength;
+
+        private final ByteBuffer byteBuffer;
 
         public ByteStream(FileService fileService, long offset, int scanSize) {
             this.fileService = fileService;
             this.offset = offset;
-            this.scanSize = scanSize;
             this.fileLength = fileService.length();
             if (scanSize <= 0) {
                 throw new IllegalArgumentException("scan size must be > 0");
@@ -101,25 +96,37 @@ public class CalculateAverage_vaidhy<T> {
             if (offset < 0) {
                 throw new IllegalArgumentException("offset must be >= 0");
             }
+            this.byteBuffer = ByteBuffer.allocate(scanSize);
+            this.byteBuffer.flip();
         }
 
         public boolean hasNext() {
-            while (index >= currentChunk.length) {
-                if (offset < fileLength) {
-                    int scanWindow = (int) (Math.min(offset + scanSize, fileLength) - offset);
-                    currentChunk = fileService.range(offset, scanWindow);
-                    offset += scanWindow;
-                    index = 0;
-                }
-                else {
-                    return false;
-                }
+            if (byteBuffer.hasRemaining()) {
+                return true;
             }
+            if (offset >= fileLength) {
+                return false;
+            }
+            byteBuffer.clear();
+            int bytesRead = fileService.read(byteBuffer, offset);
+            byteBuffer.flip();
+            offset += bytesRead;
+            assert bytesRead > 0;
             return true;
         }
 
         public byte next() {
-            return currentChunk[index++];
+            return byteBuffer.get();
+        }
+
+        public int read(byte[] dest, int destPos) {
+            int toRead = Math.min(dest.length - destPos, byteBuffer.remaining());
+            byteBuffer.get(dest, destPos, toRead);
+            return toRead;
+        }
+
+        public void rewind(int steps) {
+            byteBuffer.position(byteBuffer.position() - steps);
         }
     }
 
@@ -150,13 +157,17 @@ public class CalculateAverage_vaidhy<T> {
         public EfficientString next() {
             byte[] line = new byte[128];
             int i = 0;
-            while (byteStream.hasNext()) {
-                byte ch = byteStream.next();
-                readIndex++;
-                if (ch == 0x0a) {
-                    break;
+            loop: while (byteStream.hasNext()) {
+                int readSize = byteStream.read(line, i);
+                for (int j = 0; j < readSize; j++) {
+                    readIndex++;
+                    byte ch = line[i++];
+                    if (ch == 0x0a) {
+                        byteStream.rewind(readSize - j - 1);
+                        i--;
+                        break loop;
+                    }
                 }
-                line[i++] = ch;
             }
             return new EfficientString(line, i);
         }
@@ -186,14 +197,13 @@ public class CalculateAverage_vaidhy<T> {
     // workers space assuming they are running in different hosts.
     public T master(long chunkSize, int scanSize) {
         long len = fileService.length();
-        List<ForkJoinTask<T>> summaries = new ArrayList<>();
-        ForkJoinPool commonPool = ForkJoinPool.commonPool();
+        List<Future<T>> summaries = new ArrayList<>();
 
         for (long offset = 0; offset < len; offset += chunkSize) {
             long workerLength = Math.min(len, offset + chunkSize) - offset;
             MapReduce<T> mr = chunkProcessCreator.get();
             final long transferOffset = offset;
-            ForkJoinTask<T> task = commonPool.submit(() -> {
+            Future<T> task = ForkJoinPool.commonPool().submit(() -> {
                 worker(transferOffset, workerLength, scanSize, mr);
                 return mr.result();
             });
@@ -209,10 +219,9 @@ public class CalculateAverage_vaidhy<T> {
                     }
                 })
                 .toList();
+
         return reducer.apply(summariesDone);
     }
-
-    /// SAMPLE CANDIDATE CODE ENDS
 
     static class DiskFileService implements FileService {
 
@@ -234,36 +243,17 @@ public class CalculateAverage_vaidhy<T> {
         }
 
         @Override
-        public byte[] range(long offset, int length) {
-            byte[] newArr = new byte[length];
-            ByteBuffer outputBuffer = ByteBuffer.wrap(newArr);
+        public int read(ByteBuffer dst, long position) {
             try {
-                fileChannel.transferTo(offset, length, new WritableByteChannel() {
-                    @Override
-                    public int write(ByteBuffer src) {
-                        int rem = src.remaining();
-                        outputBuffer.put(src);
-                        return rem;
-                    }
-
-                    @Override
-                    public boolean isOpen() {
-                        return true;
-                    }
-
-                    @Override
-                    public void close() {
-                    }
-                });
+                return fileChannel.read(dst, position);
             }
             catch (IOException e) {
                 throw new RuntimeException(e);
             }
-            return newArr;
         }
     }
 
-    record EfficientString(byte[] arr, int length) {
+    public record EfficientString(byte[] arr, int length) {
 
         @Override
         public int hashCode() {
@@ -285,6 +275,11 @@ public class CalculateAverage_vaidhy<T> {
             }
             return Arrays.equals(this.arr, 0, this.length,
                     eso.arr, 0, eso.length);
+        }
+
+        @Override
+        public String toString() {
+            return new String(Arrays.copyOf(arr, length), StandardCharsets.UTF_8);
         }
     }
 
@@ -357,11 +352,11 @@ public class CalculateAverage_vaidhy<T> {
                 ChunkProcessorImpl::new,
                 CalculateAverage_vaidhy::combineOutputs);
 
-        int proc = 2 * ForkJoinPool.commonPool().getParallelism();
+        int proc = 2 * ForkJoinPool.getCommonPoolParallelism();
         long fileSize = diskFileService.length();
         long chunkSize = Math.ceilDiv(fileSize, proc);
         Map<EfficientString, IntSummaryStatistics> output = calculateAverageVaidhy.master(chunkSize,
-                (int) Math.min(10 * 1024 * 1024, chunkSize));
+                (int) Math.min(8 * 8192, chunkSize));
         Map<String, String> outputStr = toPrintMap(output);
         System.out.println(outputStr);
     }

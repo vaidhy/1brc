@@ -70,17 +70,15 @@ public class CalculateAverage_vaidhy<T> {
         this.reducer = reducer;
     }
 
-    /// SAMPLE CANDIDATE CODE STARTS
-
-    /**
-     * Reads from a given offset till the end, it calls server in
-     * blocks of scanSize whenever cursor passes the current block.
-     * Typically when hasNext() is called. hasNext() is efficient
-     * in the sense calling second time is cheap if next() is not
-     * called in between. Cheap in the sense no call to server is
-     * made.
+     /*
+      Reads from a given offset till the end, it calls server in
+      blocks of scanSize whenever cursor passes the current block.
+      Typically when hasNext() is called. hasNext() is efficient
+      in the sense calling second time is cheap if next() is not
+      called in between. Cheap in the sense no call to server is
+      made.
+      Space complexity = O(scanSize)
      */
-    // Space complexity = O(scanSize)
 
     /**
      * Reads lines from a given character stream, hasNext() is always
@@ -94,8 +92,6 @@ public class CalculateAverage_vaidhy<T> {
 
         private final long fileLength;
 
-        private final MemorySegment mmapSegment;
-
         private final long address;
 
         private long readIndex;
@@ -103,7 +99,7 @@ public class CalculateAverage_vaidhy<T> {
 
         public LineStream(FileService fileService, long offset, long length) {
             this.fileLength = fileService.length();
-            this.mmapSegment = fileService.getMemory();
+            MemorySegment mmapSegment = fileService.getMemory();
             this.address = mmapSegment.address();
             this.offset = offset;
             this.readIndex = 0;
@@ -328,7 +324,7 @@ public class CalculateAverage_vaidhy<T> {
                 CalculateAverage_vaidhy::combineOutputs);
 
         int proc = Runtime.getRuntime().availableProcessors();
-        int shards = proc;
+        int shards = 2 * proc;
         long fileSize = diskFileService.length();
         long chunkSize = Math.ceilDiv(fileSize, shards);
 

@@ -19,6 +19,7 @@ import sun.misc.Unsafe;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.lang.reflect.Field;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -58,7 +59,7 @@ public class CalculateAverage_vaidhy<T> {
     public interface FileService {
         long length();
 
-        byte getByte(long position);
+        MemorySegment getMemory();
     }
 
     public CalculateAverage_vaidhy(FileService fileService,
@@ -80,29 +81,6 @@ public class CalculateAverage_vaidhy<T> {
      * made.
      */
     // Space complexity = O(scanSize)
-    static class ByteStream {
-
-        private final FileService fileService;
-        private long position;
-        private long fileLength;
-
-        public ByteStream(FileService fileService, long offset) {
-            this.fileService = fileService;
-            this.fileLength = fileService.length();
-            this.position = offset;
-            if (offset < 0) {
-                throw new IllegalArgumentException("offset must be >= 0");
-            }
-        }
-
-        public boolean hasNext() {
-            return position < fileLength;
-        }
-
-        public byte next() {
-            return fileService.getByte(position++);
-        }
-    }
 
     /**
      * Reads lines from a given character stream, hasNext() is always
@@ -112,41 +90,58 @@ public class CalculateAverage_vaidhy<T> {
     // not counting charStream as it is only a reference, we will count that
     // in worker space.
     static class LineStream implements Iterator<EfficientString> {
-        private final ByteStream byteStream;
-        private int readIndex;
         private final long length;
 
-        public LineStream(ByteStream byteStream, long length) {
-            this.byteStream = byteStream;
+        private final long fileLength;
+
+        private final MemorySegment mmapSegment;
+
+        private final long address;
+
+        private long readIndex;
+        private long offset;
+
+        public LineStream(FileService fileService, long offset, long length) {
+            this.fileLength = fileService.length();
+            this.mmapSegment = fileService.getMemory();
+            this.address = mmapSegment.address();
+            this.offset = offset;
             this.readIndex = 0;
             this.length = length;
         }
 
         @Override
         public boolean hasNext() {
-            return readIndex <= length && byteStream.hasNext();
+            return readIndex <= length && offset < fileLength;
         }
 
         @Override
         public EfficientString next() {
-            byte[] line = new byte[128];
-            int i = 0;
-            while (byteStream.hasNext()) {
-                byte ch = byteStream.next();
-                if (ch == 0x0a) {
+            long startAddress = address + offset;
+            int loopLimit = (int) Math.min(128, fileLength - offset);
+
+            byte[] line = new byte[loopLimit];
+
+            int i;
+            for (i = 0; i < loopLimit; i++) {
+                byte ch = UNSAFE.getByte(startAddress + i);
+                if (ch == '\n') {
                     break;
                 }
-                line[i++] = ch;
+                line[i] = ch;
             }
-            readIndex += (i + 1);
-            return new EfficientString(line, i);
+
+            int delta = i + 1;
+            EfficientString ret = new EfficientString(line, i);
+            readIndex += delta;
+            offset += delta;
+            return ret;
         }
     }
 
     // Space complexity: O(scanSize) + O(max line length)
     public void worker(long offset, long chunkSize, Consumer<EfficientString> lineConsumer) {
-        ByteStream byteStream = new ByteStream(fileService, offset);
-        Iterator<EfficientString> lineStream = new LineStream(byteStream, chunkSize);
+        Iterator<EfficientString> lineStream = new LineStream(fileService, offset, chunkSize);
 
         if (offset != 0) {
             if (lineStream.hasNext()) {
@@ -197,13 +192,13 @@ public class CalculateAverage_vaidhy<T> {
     static class DiskFileService implements FileService {
 
         private final FileChannel fileChannel;
-        private final long mappedAddress;
+        private final MemorySegment memorySegment;
 
         DiskFileService(String fileName) throws IOException {
             this.fileChannel = FileChannel.open(Path.of(fileName),
                     StandardOpenOption.READ);
-            this.mappedAddress = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0,
-                    fileChannel.size(), Arena.global()).address();
+            this.memorySegment = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0,
+                    fileChannel.size(), Arena.global());
         }
 
         @Override
@@ -217,8 +212,8 @@ public class CalculateAverage_vaidhy<T> {
         }
 
         @Override
-        public byte getByte(long position) {
-            return UNSAFE.getByte(mappedAddress + position);
+        public MemorySegment getMemory() {
+            return memorySegment;
         }
     }
 
@@ -248,6 +243,12 @@ public class CalculateAverage_vaidhy<T> {
                 }
             }
             return true;
+        }
+
+        @Override
+        public String toString() {
+            return new String(Arrays.copyOf(arr, length),
+                    StandardCharsets.UTF_8);
         }
     }
 

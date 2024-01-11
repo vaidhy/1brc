@@ -76,8 +76,16 @@ public class CalculateAverage_vaidhy<T> {
                 if (bs.length() != len) {
                     return false;
                 }
-                for (int i = 0; i < len; i++) {
-                    if (this.get(i) != bs.get(i)) {
+                int i = 0;
+                for (; i < len/8; i+=8) {
+                    if (UNSAFE.getLong(this.from + (i * 8)) !=
+                            UNSAFE.getLong(bs.from + (i * 8))) {
+                        return false;
+                    }
+                }
+                for (int j = i; j < len; j++) {
+                    if (UNSAFE.getByte(this.from + j) !=
+                        UNSAFE.getByte((bs.from + j))) {
                         return false;
                     }
                 }

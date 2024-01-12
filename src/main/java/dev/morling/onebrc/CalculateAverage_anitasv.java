@@ -15,11 +15,14 @@
  */
 package dev.morling.onebrc;
 
+import jdk.incubator.vector.ByteVector;
+import jdk.incubator.vector.VectorMask;
+
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.lang.reflect.Array;
+import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -91,8 +94,25 @@ public class CalculateAverage_anitasv {
             return mmapMemory.get(ValueLayout.JAVA_BYTE, address);
         }
 
+
+        private static final int lookaheadSize = ByteVector.SPECIES_PREFERRED.length();
+
         long indexOf(long position, byte ch) {
             long len = mmapMemory.byteSize();
+            while (position + lookaheadSize < len) {
+                ByteVector lookAhead = ByteVector.fromMemorySegment(ByteVector.SPECIES_PREFERRED,
+                        mmapMemory,
+                        position,
+                        ByteOrder.LITTLE_ENDIAN);
+                VectorMask<Byte> res = lookAhead.eq(ch);
+                int index = res.firstTrue();
+                if (index == res.length()) {
+                    position += lookaheadSize;
+                } else {
+                    return position + index;
+                }
+            }
+
             for (; position < len; position++) {
                 byte mCh = get(position);
                 if (mCh == ch) {

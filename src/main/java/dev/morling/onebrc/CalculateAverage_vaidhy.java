@@ -168,6 +168,8 @@ public class CalculateAverage_vaidhy<I, T> {
         this.reducer = reducer;
     }
 
+    private static final int byteArrayOffset = UNSAFE.arrayBaseOffset(byte[].class);
+
     static class LineStream {
         private final long fileEnd;
         private final long chunkEnd;
@@ -195,14 +197,22 @@ public class CalculateAverage_vaidhy<I, T> {
             long i = position;
             while ((i + 3) < fileEnd) {
                 // Adding 16 as it is the offset for primitive arrays
-                ByteBuffer.wrap(b).putInt(UNSAFE.getInt(i));
+                // ByteBuffer.wrap(b).putInt(UNSAFE.getInt(i));
+                UNSAFE.copyMemory(null, i, b, byteArrayOffset, 4);
 
-                if (b[3] == 0x3B) {
+                if (b[0] == 0x3B) {
                     break;
                 }
                 i++;
-                h = ((h << 5) - h) ^ b[3];
-                s = (s << 8) ^ b[3];
+                h = ((h << 5) - h) ^ b[0];
+                s = (s << 8) ^ b[0];
+
+                if (b[1] == 0x3B) {
+                    break;
+                }
+                i++;
+                h = ((h << 5) - h) ^ b[1];
+                s = (s << 8) ^ b[2];
 
                 if (b[2] == 0x3B) {
                     break;
@@ -211,19 +221,12 @@ public class CalculateAverage_vaidhy<I, T> {
                 h = ((h << 5) - h) ^ b[2];
                 s = (s << 8) ^ b[2];
 
-                if (b[1] == 0x3B) {
+                if (b[3] == 0x3B) {
                     break;
                 }
                 i++;
-                h = ((h << 5) - h) ^ b[1];
-                s = (s << 8) ^ b[1];
-
-                if (b[0] == 0x3B) {
-                    break;
-                }
-                i++;
-                h = ((h << 5) - h) ^ b[0];
-                s = (s << 8) ^ b[0];
+                h = ((h << 5) - h) ^ b[3];
+                s = (s << 8) ^ b[3];
             }
 
             this.hash = h;

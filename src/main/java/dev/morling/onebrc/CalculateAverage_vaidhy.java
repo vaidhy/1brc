@@ -32,7 +32,7 @@ import java.util.concurrent.Future;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-public class CalculateAverage_vaidhy<I, T> {
+public class CalculateAverage_vaidhy<T> {
 
     private static final String FILE = "./measurements.txt";
 

@@ -32,7 +32,7 @@ import java.util.concurrent.Future;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-public class CalculateAverage_vaidhy<T> {
+public class CalculateAverage_vaidhy<I, T> {
 
     private static final String FILE = "./measurements.txt";
 
@@ -117,7 +117,7 @@ public class CalculateAverage_vaidhy<T> {
         for (; index < length; index++) {
             byte ch = slice.get(index);
             if (ch != '.') {
-                normalized = normalized * 10 + (ch - '0');
+                normalized = (normalized << 3) + (normalized << 1) + (ch ^ 0x30);
             }
         }
         if (!sign) {

@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -37,20 +38,28 @@ public class CalculateAverage_anitasv {
         int next;
     }
 
+    // Stolen from java.util.HashMap
+    static final int MAXIMUM_CAPACITY = 1 << 30;
+
+    static int tableSizeFor(int cap) {
+        int n = -1 >>> Integer.numberOfLeadingZeros(cap - 1);
+        return (n < 0) ? 1 : (n >= MAXIMUM_CAPACITY) ? MAXIMUM_CAPACITY : n + 1;
+    }
+
     private static class LongHashMap<T> {
         private final LongHashEntry<T>[] entries;
         private int next = -1;
 
         @SuppressWarnings("unchecked")
         private LongHashMap(int capacity) {
-            this.entries = (LongHashEntry<T>[]) new LongHashEntry[capacity];
+            this.entries = (LongHashEntry<T>[]) new LongHashEntry[tableSizeFor(capacity)];
             for (int i = 0; i < entries.length; i++) {
                 this.entries[i] = new LongHashEntry<>();
             }
         }
 
         public LongHashEntry<T> find(long key) {
-            int start = Math.floorMod(key, entries.length);
+            int start = Long.hashCode(key) & (entries.length - 1);
             int index = start;
             do {
                 LongHashEntry<T> entry = entries[index];
@@ -89,7 +98,6 @@ public class CalculateAverage_anitasv {
         byte get(long address) {
             return mmapMemory.get(ValueLayout.JAVA_BYTE, address);
         }
-
 
         long indexOf(long position, byte ch) {
             long len = mmapMemory.byteSize();

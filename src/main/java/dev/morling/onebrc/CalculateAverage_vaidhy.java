@@ -41,12 +41,16 @@ public class CalculateAverage_vaidhy<I, T> {
         private long suffix;
         private int hash;
 
+        private int next;
+
         IntSummaryStatistics value;
     }
 
     private static class PrimitiveHashMap {
         private final HashEntry[] entries;
         private final int twoPow;
+
+        private int next = -1;
 
         PrimitiveHashMap(int twoPow) {
             this.twoPow = twoPow;
@@ -63,6 +67,12 @@ public class CalculateAverage_vaidhy<I, T> {
             do {
                 HashEntry entry = entries[i];
                 if (entry.value == null) {
+                    entry.next = next;
+                    entry.startAddress = startAddress;
+                    entry.endAddress = endAddress;
+                    entry.suffix = suffix;
+                    entry.hash = hash;
+                    next = i;
                     return entry;
                 }
                 if (entry.hash == hash) {
@@ -95,6 +105,24 @@ public class CalculateAverage_vaidhy<I, T> {
                 entryIndex += 8;
             }
             return true;
+        }
+
+        public Iterable<HashEntry> entries() {
+            return () -> new Iterator<>() {
+                int index = PrimitiveHashMap.this.next;
+
+                @Override
+                public boolean hasNext() {
+                    return index != -1;
+                }
+
+                @Override
+                public HashEntry next() {
+                    HashEntry entry = entries[index];
+                    index = entry.next;
+                    return entry;
+                }
+            };
         }
     }
 
@@ -344,14 +372,12 @@ public class CalculateAverage_vaidhy<I, T> {
             if (entry == null) {
                 throw new IllegalStateException("Hash table too small :(");
             }
-            if (entry.value == null) {
-                entry.startAddress = keyStartAddress;
-                entry.endAddress = keyEndAddress;
-                entry.suffix = suffix;
-                entry.hash = hash;
-                entry.value = new IntSummaryStatistics();
+            IntSummaryStatistics stats = entry.value;
+            if (stats == null) {
+                stats = new IntSummaryStatistics();
+                entry.value = stats;
             }
-            entry.value.accept(temperature);
+            stats.accept(temperature);
         }
 
         @Override
@@ -397,7 +423,7 @@ public class CalculateAverage_vaidhy<I, T> {
 
         Map<String, IntSummaryStatistics> output = new HashMap<>(10000);
         for (PrimitiveHashMap map : list) {
-            for (HashEntry entry : map.entries) {
+            for (HashEntry entry : map.entries()) {
                 if (entry.value != null) {
                     String keyStr = unsafeToString(entry.startAddress, entry.endAddress);
 

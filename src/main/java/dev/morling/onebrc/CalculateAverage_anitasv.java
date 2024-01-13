@@ -15,14 +15,10 @@
  */
 package dev.morling.onebrc;
 
-import jdk.incubator.vector.ByteVector;
-import jdk.incubator.vector.VectorMask;
-
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -95,24 +91,8 @@ public class CalculateAverage_anitasv {
         }
 
 
-        private static final int lookaheadSize = ByteVector.SPECIES_PREFERRED.length();
-
         long indexOf(long position, byte ch) {
             long len = mmapMemory.byteSize();
-            while (position + lookaheadSize < len) {
-                ByteVector lookAhead = ByteVector.fromMemorySegment(ByteVector.SPECIES_PREFERRED,
-                        mmapMemory,
-                        position,
-                        ByteOrder.LITTLE_ENDIAN);
-                VectorMask<Byte> res = lookAhead.eq(ch);
-                int index = res.firstTrue();
-                if (index == res.length()) {
-                    position += lookaheadSize;
-                } else {
-                    return position + index;
-                }
-            }
-
             for (; position < len; position++) {
                 byte mCh = get(position);
                 if (mCh == ch) {
@@ -257,8 +237,7 @@ public class CalculateAverage_anitasv {
     private static Map<String, IntSummaryStatistics> master(MemorySegment mmapMemory) {
         long totalBytes = mmapMemory.byteSize();
         int numWorkers = Runtime.getRuntime().availableProcessors();
-        long chunkSize = Math.floorDiv(totalBytes, numWorkers);
-
+        long chunkSize = Math.ceilDiv(totalBytes, numWorkers);
         return combineResults(IntStream.range(0, numWorkers)
                 .parallel()
                 .mapToObj(workerId -> {
@@ -287,7 +266,6 @@ public class CalculateAverage_anitasv {
             IntSummaryStatistics stat = entry.getValue();
             outputStr.put(entry.getKey(), statToString(stat));
         }
-        System.out.println(outputStr.size());
         return outputStr;
     }
 

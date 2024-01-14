@@ -19,7 +19,7 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.ByteOrder;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -29,7 +29,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class CalculateAverage_anitasv {
-
     private static final String FILE = "./measurements.txt";
 
     private static class LongHashEntry<T> {
@@ -90,21 +89,41 @@ public class CalculateAverage_anitasv {
             }
             return values;
         }
+
+        public String toString() {
+            StringBuilder builder = new StringBuilder();
+            int scan = next;
+            while (scan != -1) {
+                LongHashEntry<T> entry = entries[scan];
+                builder.append(entry.key).append(",").append(entry.value).append("\n");
+                scan = entry.next;
+            }
+            return builder.toString();
+        }
     }
 
     private record Shard(MemorySegment mmapMemory,
                          long chunkStart, long chunkEnd) {
 
-        byte get(long address) {
+        byte getByte(long address) {
             return mmapMemory.get(ValueLayout.JAVA_BYTE, address);
         }
 
+        long getAlignedLong(long address) {
+            return mmapMemory.get(ValueLayout.JAVA_LONG, address);
+        }
+
+        long getSlowLong(long address) {
+            return mmapMemory.get(ValueLayout.JAVA_LONG_UNALIGNED, address);
+        }
+
         long indexOf(long position, byte ch) {
-            long len = mmapMemory.byteSize();
-            for (; position < len; position++) {
-                byte mCh = get(position);
-                if (mCh == ch) {
-                    return position;
+            ByteBuffer buf = mmapMemory.asSlice(position,
+                            Math.min(128, mmapMemory.byteSize() - position))
+                    .asByteBuffer();
+            while (buf.hasRemaining()) {
+                if (buf.get() == ch) {
+                    return position + buf.position() - 1;
                 }
             }
             return -1;
@@ -118,13 +137,13 @@ public class CalculateAverage_anitasv {
             int normalized = 0;
             boolean sign = true;
             long index = start;
-            if (get(index) == '-') {
+            if (getByte(index) == '-') {
                 index++;
                 sign = false;
             }
             boolean hasDot = false;
             for (; index < end; index++) {
-                byte ch = get(index);
+                byte ch = getByte(index);
                 if (ch != '.') {
                     normalized = normalized * 10 + (ch - '0');
                 } else {
@@ -141,23 +160,15 @@ public class CalculateAverage_anitasv {
         }
 
         public long computeHash(long position, long stationEnd) {
-            long hash = 0;
-            for (long index = position; index < stationEnd; index++) {
-                hash = hash * 31 + get(index);
-            }
-            return hash;
+            ByteBuffer buf2 = mmapMemory.asSlice(position, stationEnd - position)
+                    .asByteBuffer();
+            return buf2.hashCode();
         }
 
         public boolean matches(byte[] existingStation, long start, long end) {
-            if (existingStation.length != (end - start)) {
-                return false;
-            }
-            for (int i = 0; i < existingStation.length; i++) {
-                if (existingStation[i] != get(start + i)) {
-                    return false;
-                }
-            }
-            return true;
+            ByteBuffer buf1 = ByteBuffer.wrap(existingStation);
+            ByteBuffer buf2 = mmapMemory.asSlice(start, end - start).asByteBuffer();
+            return buf1.equals(buf2);
         }
     }
 
@@ -188,14 +199,14 @@ public class CalculateAverage_anitasv {
                 if (entry == null) {
                     throw new IllegalStateException("Not enough space in hashmap.");
                 }
-                List<ResultRow> matches = entry.value;
-                if (matches == null) {
-                    matches = new ArrayList<>();
-                    entry.value = matches;
+                List<ResultRow> collisions = entry.value;
+                if (collisions == null) {
+                    collisions = new ArrayList<>();
+                    entry.value = collisions;
                 }
 
                 boolean found = false;
-                for (ResultRow existing : matches) {
+                for (ResultRow existing : collisions) {
                     byte[] existingStation = existing.station();
                     if (shard.matches(existingStation, position, stationEnd)) {
                         existing.statistics.accept(temperature);
@@ -207,7 +218,7 @@ public class CalculateAverage_anitasv {
                     IntSummaryStatistics stats = new IntSummaryStatistics();
                     stats.accept(temperature);
                     ResultRow rr = new ResultRow(shard.getRange(position, stationEnd), stats);
-                    matches.add(rr);
+                    collisions.add(rr);
                 }
                 position = temperatureEnd;
             }

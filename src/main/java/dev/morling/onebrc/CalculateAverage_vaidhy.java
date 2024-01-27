@@ -84,7 +84,7 @@ public class CalculateAverage_vaidhy<I, T> {
             }
 
             if (entryVector.lane(0) == 0) {
-                key.intoArray(keys, i * 128);
+                key.intoArray(keys, i * 16);
                 nextIter[i] = next;
                 next = i;
                 return values[i];
@@ -104,7 +104,7 @@ public class CalculateAverage_vaidhy<I, T> {
                 }
 
                 if (entryVector.lane(0) == 0) {
-                    key.intoArray(keys, i * 128);
+                    key.intoArray(keys, i * 16);
                     nextIter[i] = next;
                     next = i;
                     return values[i];
@@ -119,25 +119,25 @@ public class CalculateAverage_vaidhy<I, T> {
             return null;
         }
 
-//        private static boolean compareEntryKeys(long startAddress, long endAddress, HashEntry entry) {
-//            long entryIndex = entry.startAddress;
-//            long lookupIndex = startAddress;
-//
-//            for (; (lookupIndex + 7) < endAddress; lookupIndex += 8) {
-//                if (UNSAFE.getLong(entryIndex) != UNSAFE.getLong(lookupIndex)) {
-//                    return false;
-//                }
-//                entryIndex += 8;
-//            }
-//            // for (; lookupIndex < endAddress; lookupIndex++) {
-//            // if (UNSAFE.getByte(entryIndex) != UNSAFE.getByte(lookupIndex)) {
-//            // return false;
-//            // }
-//            // entryIndex++;
-//            // }
-//
-//            return true;
-//        }
+        // private static boolean compareEntryKeys(long startAddress, long endAddress, HashEntry entry) {
+        // long entryIndex = entry.startAddress;
+        // long lookupIndex = startAddress;
+        //
+        // for (; (lookupIndex + 7) < endAddress; lookupIndex += 8) {
+        // if (UNSAFE.getLong(entryIndex) != UNSAFE.getLong(lookupIndex)) {
+        // return false;
+        // }
+        // entryIndex += 8;
+        // }
+        // // for (; lookupIndex < endAddress; lookupIndex++) {
+        // // if (UNSAFE.getByte(entryIndex) != UNSAFE.getByte(lookupIndex)) {
+        // // return false;
+        // // }
+        // // entryIndex++;
+        // // }
+        //
+        // return true;
+        // }
 
         public Iterable<Map.Entry<String, IntSummaryStatistics>> entrySet() {
             return () -> new Iterator<>() {
@@ -156,8 +156,8 @@ public class CalculateAverage_vaidhy<I, T> {
                             keys, scan * 16)
                             .reinterpretAsBytes();
 
-//                    entryVector.to
-                    String key = new String(entryVector.toArray(), StandardCharsets.UTF_8);
+                    byte[] station = entryVector.toArray();
+                    String key = new String(station, 8, station[0], StandardCharsets.UTF_8);
 
                     scan = nextIter[scan];
                     return new AbstractMap.SimpleEntry<>(key, value);
@@ -425,7 +425,7 @@ public class CalculateAverage_vaidhy<I, T> {
             long stationEnd = -1;
             long hash = DEFAULT_SEED;
             long suffix = 0;
-            int keyIndex = 0;
+            int keyIndex = 1;
             do {
                 long data = UNSAFE.getLong(position);
                 int semiPosition = findByteOctet(data, SEMI_DETECTION);
@@ -442,6 +442,7 @@ public class CalculateAverage_vaidhy<I, T> {
                     hash = simpleHash(hash, suffix);
                     keyStorage[keyIndex++] = suffix;
                     Arrays.fill(keyStorage, keyIndex, keyStorage.length, 0);
+                    keyStorage[0] = stationEnd - stationStart;
                     break;
                 }
                 else {
@@ -499,11 +500,13 @@ public class CalculateAverage_vaidhy<I, T> {
             long keyStartAddress = lineStream.position;
             long keyEndAddress = lineStream.findSemi();
             int keyLen = (int) (keyEndAddress - keyStartAddress);
+            Arrays.fill(keyStorage, 0, keyStorage.length, (byte) 0);
+
+            keyStorage[0] = (byte) keyLen;
             int index;
-            for (index = 0; index < keyLen; index++) {
-                keyStorage[index] = UNSAFE.getByte(keyStartAddress + index);
+            for (index = 8; index < keyLen + 8; index++) {
+                keyStorage[index] = UNSAFE.getByte(keyStartAddress + index - 8);
             }
-            Arrays.fill(keyStorage, index, keyStorage.length, (byte) 0);
 
             long keyHash = lineStream.hash;
             long valueStartAddress = lineStream.position;

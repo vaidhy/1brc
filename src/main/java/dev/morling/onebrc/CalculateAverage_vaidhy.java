@@ -15,10 +15,13 @@
  */
 package dev.morling.onebrc;
 
+import jdk.incubator.vector.ByteVector;
+import jdk.incubator.vector.LongVector;
 import sun.misc.Unsafe;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -46,73 +49,97 @@ public class CalculateAverage_vaidhy<I, T> {
     }
 
     private static class PrimitiveHashMap {
-        private final HashEntry[] entries;
+        private final long[] keys;
+        private final IntSummaryStatistics[] values;
+
+        private final int[] nextIter;
+
         private final int twoPow;
+
+        private final int tableSize;
+
         private int next = -1;
 
         PrimitiveHashMap(int twoPow) {
             this.twoPow = twoPow;
-            this.entries = new HashEntry[1 << twoPow];
-            for (int i = 0; i < entries.length; i++) {
-                this.entries[i] = new HashEntry();
+            this.tableSize = 1 << twoPow;
+            this.keys = new long[tableSize * 16];
+            this.values = new IntSummaryStatistics[tableSize];
+            this.nextIter = new int[tableSize];
+
+            for (int i = 0; i < tableSize; i++) {
+                this.values[i] = new IntSummaryStatistics();
             }
         }
 
-        public HashEntry find(long startAddress, long endAddress, long hash, long suffix) {
-            int len = entries.length;
+        public IntSummaryStatistics find(LongVector key, long hash) {
             int h = Long.hashCode(hash);
-            int i = (h ^ (h >> twoPow)) & (len - 1);
+            int i = (h ^ (h >> twoPow)) & (tableSize - 1);
+
+            LongVector entryVector = LongVector.fromArray(LongVector.SPECIES_128,
+                    keys, i * 16);
+
+            if (entryVector.eq(key).allTrue()) {
+                return values[i];
+            }
+
+            if (entryVector.lane(0) == 0) {
+                key.intoArray(keys, i * 128);
+                nextIter[i] = next;
+                next = i;
+                return values[i];
+            }
+
+            i++;
+            if (i == tableSize) {
+                i = 0;
+            }
 
             do {
-                HashEntry entry = entries[i];
-                if (entry.value == null) {
-                    entry.startAddress = startAddress;
-                    entry.endAddress = endAddress;
-                    entry.hash = hash;
-                    entry.next = next;
-                    entry.suffix = suffix;
-                    this.next = i;
-                    return entry;
+                entryVector = LongVector.fromArray(LongVector.SPECIES_128,
+                        keys, i * 16);
+
+                if (entryVector.eq(key).allTrue()) {
+                    return values[i];
                 }
-                if (entry.hash == hash && entry.suffix == suffix) {
-                    long entryLength = entry.endAddress - entry.startAddress;
-                    long lookupLength = endAddress - startAddress;
-                    if (entryLength == lookupLength) {
-                        boolean found = compareEntryKeys(startAddress, endAddress, entry);
-                        if (found) {
-                            return entry;
-                        }
-                    }
+
+                if (entryVector.lane(0) == 0) {
+                    key.intoArray(keys, i * 128);
+                    nextIter[i] = next;
+                    next = i;
+                    return values[i];
                 }
+
                 i++;
-                if (i == len) {
+                if (i == tableSize) {
                     i = 0;
                 }
             } while (i != hash);
+
             return null;
         }
 
-        private static boolean compareEntryKeys(long startAddress, long endAddress, HashEntry entry) {
-            long entryIndex = entry.startAddress;
-            long lookupIndex = startAddress;
+//        private static boolean compareEntryKeys(long startAddress, long endAddress, HashEntry entry) {
+//            long entryIndex = entry.startAddress;
+//            long lookupIndex = startAddress;
+//
+//            for (; (lookupIndex + 7) < endAddress; lookupIndex += 8) {
+//                if (UNSAFE.getLong(entryIndex) != UNSAFE.getLong(lookupIndex)) {
+//                    return false;
+//                }
+//                entryIndex += 8;
+//            }
+//            // for (; lookupIndex < endAddress; lookupIndex++) {
+//            // if (UNSAFE.getByte(entryIndex) != UNSAFE.getByte(lookupIndex)) {
+//            // return false;
+//            // }
+//            // entryIndex++;
+//            // }
+//
+//            return true;
+//        }
 
-            for (; (lookupIndex + 7) < endAddress; lookupIndex += 8) {
-                if (UNSAFE.getLong(entryIndex) != UNSAFE.getLong(lookupIndex)) {
-                    return false;
-                }
-                entryIndex += 8;
-            }
-            // for (; lookupIndex < endAddress; lookupIndex++) {
-            // if (UNSAFE.getByte(entryIndex) != UNSAFE.getByte(lookupIndex)) {
-            // return false;
-            // }
-            // entryIndex++;
-            // }
-
-            return true;
-        }
-
-        public Iterable<HashEntry> entrySet() {
+        public Iterable<Map.Entry<String, IntSummaryStatistics>> entrySet() {
             return () -> new Iterator<>() {
                 int scan = next;
 
@@ -122,10 +149,18 @@ public class CalculateAverage_vaidhy<I, T> {
                 }
 
                 @Override
-                public HashEntry next() {
-                    HashEntry entry = entries[scan];
-                    scan = entry.next;
-                    return entry;
+                public Map.Entry<String, IntSummaryStatistics> next() {
+                    IntSummaryStatistics value = values[scan];
+
+                    ByteVector entryVector = LongVector.fromArray(LongVector.SPECIES_128,
+                            keys, scan * 16)
+                            .reinterpretAsBytes();
+
+//                    entryVector.to
+                    String key = new String(entryVector.toArray(), StandardCharsets.UTF_8);
+
+                    scan = nextIter[scan];
+                    return new AbstractMap.SimpleEntry<>(key, value);
                 }
             };
         }
@@ -206,7 +241,7 @@ public class CalculateAverage_vaidhy<I, T> {
 
     interface MapReduce<I> {
 
-        void process(long keyStartAddress, long keyEndAddress, long hash, long suffix, int temperature);
+        void process(LongVector key, long hash, int temperature);
 
         I result();
     }
@@ -219,6 +254,8 @@ public class CalculateAverage_vaidhy<I, T> {
         long length();
 
         long address();
+
+        MemorySegment segment();
     }
 
     CalculateAverage_vaidhy(FileService fileService,
@@ -360,10 +397,13 @@ public class CalculateAverage_vaidhy<I, T> {
     }
 
     private void bigWorker(long offset, long chunkSize, MapReduce<I> lineConsumer) {
-        long chunkStart = offset + fileService.address();
+        long baseAddress = fileService.address();
+        long chunkStart = offset + baseAddress;
         long chunkEnd = chunkStart + chunkSize;
-        long fileEnd = fileService.address() + fileService.length();
+        long fileEnd = baseAddress + fileService.length();
         long stopPoint = Math.min(chunkEnd + 1, fileEnd);
+
+        long[] keyStorage = new long[16];
 
         boolean skip = offset != 0;
         for (long position = chunkStart; position < stopPoint;) {
@@ -385,6 +425,7 @@ public class CalculateAverage_vaidhy<I, T> {
             long stationEnd = -1;
             long hash = DEFAULT_SEED;
             long suffix = 0;
+            int keyIndex = 0;
             do {
                 long data = UNSAFE.getLong(position);
                 int semiPosition = findByteOctet(data, SEMI_DETECTION);
@@ -399,9 +440,12 @@ public class CalculateAverage_vaidhy<I, T> {
                         suffix = UNSAFE.getLong(position - 8);
                     }
                     hash = simpleHash(hash, suffix);
+                    keyStorage[keyIndex++] = suffix;
+                    Arrays.fill(keyStorage, keyIndex, keyStorage.length, 0);
                     break;
                 }
                 else {
+                    keyStorage[keyIndex++] = data;
                     hash = simpleHash(hash, data);
                     position = position + 8;
                 }
@@ -431,160 +475,14 @@ public class CalculateAverage_vaidhy<I, T> {
                 }
             }
 
-            lineConsumer.process(stationStart, stationEnd, hash, suffix, temperature);
-        }
-    }
+            LongVector key = LongVector.fromArray(LongVector.SPECIES_128, keyStorage, 0);
 
-    private void bigWorkerAligned(long offset, long chunkSize, MapReduce<I> lineConsumer) {
-        long fileStart = fileService.address();
-        long chunkEnd = fileStart + offset + chunkSize;
-        long newRecordStart = fileStart + offset;
-        long position = fileStart + offset;
-        long fileEnd = fileStart + fileService.length();
-
-        int nextReadOffsetBits = 0;
-
-        long data = UNSAFE.getLong(position);
-
-        if (offset != 0) {
-            boolean foundNewLine = false;
-            for (; position < chunkEnd; position += 8) {
-                data = UNSAFE.getLong(position);
-                int newLinePositionBits = findNewLine(data, nextReadOffsetBits);
-                if (newLinePositionBits != -1) {
-                    nextReadOffsetBits = newLinePositionBits + 8;
-                    newRecordStart = position + (nextReadOffsetBits >>> 3);
-
-                    if (nextReadOffsetBits == 64) {
-                        position += 8;
-                        nextReadOffsetBits = 0;
-                        data = UNSAFE.getLong(position);
-                    }
-                    foundNewLine = true;
-                    break;
-                }
-            }
-            if (!foundNewLine) {
-                return;
-            }
-        }
-
-        boolean newLineToken = false;
-        // false means looking for semi Colon
-        // true means looking for new line.
-
-        long stationEnd = offset;
-
-        long hash = DEFAULT_SEED;
-        long prevRelevant = 0;
-        int prevBits = 0;
-        long suffix = 0;
-
-        long crossPoint = Math.min(chunkEnd + 1, fileEnd);
-
-        while (true) {
-            if (newLineToken) {
-                int newLinePositionBits = findNewLine(data, nextReadOffsetBits);
-                if (newLinePositionBits == -1) {
-                    nextReadOffsetBits = 0;
-                    position += 8;
-                    data = UNSAFE.getLong(position);
-                }
-                else {
-                    long temperatureEnd = position + (newLinePositionBits >>> 3);
-                    int temperature = parseDouble(stationEnd + 1, temperatureEnd);
-                    lineConsumer.process(newRecordStart, stationEnd, hash, suffix, temperature);
-                    newLineToken = false;
-
-                    nextReadOffsetBits = newLinePositionBits + 8;
-                    newRecordStart = temperatureEnd + 1;
-
-                    if (newRecordStart >= crossPoint) {
-                        break;
-                    }
-
-                    hash = DEFAULT_SEED;
-
-                    if (nextReadOffsetBits == 64) {
-                        nextReadOffsetBits = 0;
-                        position += 8;
-                        data = UNSAFE.getLong(position);
-                    }
-                }
-            }
-            else {
-                int semiPositionBits = findSemi(data, nextReadOffsetBits);
-
-                if (semiPositionBits == -1) {
-                    long currRelevant = data >>> (nextReadOffsetBits - prevBits);
-
-                    prevRelevant = prevRelevant | currRelevant;
-                    int newPrevBits = prevBits + (64 - nextReadOffsetBits);
-
-                    if (newPrevBits >= 64) {
-                        hash = simpleHash(hash, prevRelevant);
-
-                        prevBits = (newPrevBits - 64);
-                        if (prevBits != 0) {
-                            prevRelevant = (data >>> (64 - prevBits));
-                        }
-                        else {
-                            prevRelevant = 0;
-                        }
-                    }
-                    else {
-                        prevBits = newPrevBits;
-                    }
-
-                    nextReadOffsetBits = 0;
-                    position += 8;
-                    data = UNSAFE.getLong(position);
-                }
-                else {
-                    // currentData = xxxx_x;aaN
-                    if (semiPositionBits != 0) {
-                        long currRelevant = (data & (ALL_ONES >>> (64 - semiPositionBits))) >>> nextReadOffsetBits;
-                        // 0000_00aa
-
-                        // 0aaa_0000;
-                        long currUsable = currRelevant << prevBits;
-
-                        long toHash = prevRelevant | currUsable;
-
-                        hash = simpleHash(hash, toHash);
-
-                        int newPrevBits = prevBits + (semiPositionBits - nextReadOffsetBits);
-                        if (newPrevBits >= 64) {
-                            suffix = currRelevant >>> (64 - prevBits);
-                            hash = simpleHash(hash, suffix);
-                        }
-                        else {
-                            suffix = toHash;
-                        }
-                    }
-                    else {
-                        suffix = prevRelevant;
-                        hash = simpleHash(hash, prevRelevant);
-                    }
-
-                    prevRelevant = 0;
-                    prevBits = 0;
-
-                    stationEnd = position + (semiPositionBits >>> 3);
-                    nextReadOffsetBits = semiPositionBits + 8;
-                    newLineToken = true;
-
-                    if (nextReadOffsetBits == 64) {
-                        nextReadOffsetBits = 0;
-                        position += 8;
-                        data = UNSAFE.getLong(position);
-                    }
-                }
-            }
+            lineConsumer.process(key, hash, temperature);
         }
     }
 
     private void smallWorker(long offset, long chunkSize, MapReduce<I> lineConsumer) {
+        byte[] keyStorage = new byte[128];
         LineStream lineStream = new LineStream(fileService, offset, chunkSize);
 
         if (offset != 0) {
@@ -600,13 +498,22 @@ public class CalculateAverage_vaidhy<I, T> {
         while (lineStream.hasNext()) {
             long keyStartAddress = lineStream.position;
             long keyEndAddress = lineStream.findSemi();
+            int keyLen = (int) (keyEndAddress - keyStartAddress);
+            int index;
+            for (index = 0; index < keyLen; index++) {
+                keyStorage[index] = UNSAFE.getByte(keyStartAddress + index);
+            }
+            Arrays.fill(keyStorage, index, keyStorage.length, (byte) 0);
+
             long keyHash = lineStream.hash;
-            long suffix = lineStream.suffix;
             long valueStartAddress = lineStream.position;
             long valueEndAddress = lineStream.findTemperature();
             int temperature = parseDouble(valueStartAddress, valueEndAddress);
             // System.out.println("Small worker!");
-            lineConsumer.process(keyStartAddress, keyEndAddress, keyHash, suffix, temperature);
+
+            LongVector keyVector = ByteVector.fromArray(ByteVector.SPECIES_128, keyStorage, 0)
+                    .reinterpretAsLongs();
+            lineConsumer.process(keyVector, keyHash, temperature);
         }
     }
 
@@ -666,25 +573,29 @@ public class CalculateAverage_vaidhy<I, T> {
     }
 
     static class DiskFileService implements FileService {
-        private final long fileSize;
-        private final long mappedAddress;
+        private final MemorySegment segment;
 
         DiskFileService(String fileName) throws IOException {
             FileChannel fileChannel = FileChannel.open(Path.of(fileName),
                     StandardOpenOption.READ);
-            this.fileSize = fileChannel.size();
-            this.mappedAddress = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0,
-                    fileSize, Arena.global()).address();
+            long fileSize = fileChannel.size();
+            this.segment = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0,
+                    fileSize, Arena.global());
         }
 
         @Override
         public long length() {
-            return fileSize;
+            return segment.byteSize();
         }
 
         @Override
         public long address() {
-            return mappedAddress;
+            return segment.address();
+        }
+
+        @Override
+        public MemorySegment segment() {
+            return segment;
         }
     }
 
@@ -694,15 +605,12 @@ public class CalculateAverage_vaidhy<I, T> {
         private final PrimitiveHashMap statistics = new PrimitiveHashMap(14);
 
         @Override
-        public void process(long keyStartAddress, long keyEndAddress, long hash, long suffix, int temperature) {
-            HashEntry entry = statistics.find(keyStartAddress, keyEndAddress, hash, suffix);
+        public void process(LongVector key, long hash, int temperature) {
+            IntSummaryStatistics entry = statistics.find(key, hash);
             if (entry == null) {
                 throw new IllegalStateException("Hash table too small :(");
             }
-            if (entry.value == null) {
-                entry.value = new IntSummaryStatistics();
-            }
-            entry.value.accept(temperature);
+            entry.accept(temperature);
         }
 
         @Override
@@ -745,16 +653,14 @@ public class CalculateAverage_vaidhy<I, T> {
 
         Map<String, IntSummaryStatistics> output = new HashMap<>(10000);
         for (PrimitiveHashMap map : list) {
-            for (HashEntry entry : map.entrySet()) {
-                if (entry.value != null) {
-                    String keyStr = unsafeToString(entry.startAddress, entry.endAddress);
-
-                    output.compute(keyStr, (ignore, val) -> {
+            for (Map.Entry<String, IntSummaryStatistics> entry : map.entrySet()) {
+                if (entry.getValue() != null) {
+                    output.compute(entry.getKey(), (ignore, val) -> {
                         if (val == null) {
-                            return entry.value;
+                            return entry.getValue();
                         }
                         else {
-                            val.combine(entry.value);
+                            val.combine(entry.getValue());
                             return val;
                         }
                     });

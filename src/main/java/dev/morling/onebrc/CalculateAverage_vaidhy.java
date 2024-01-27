@@ -423,7 +423,7 @@ public class CalculateAverage_vaidhy<I, T> {
                     position = position + 8;
                 }
             } while (true);
-
+            String city = unsafeToString(stationStart, stationEnd);
             int temperature = 0;
             {
                 byte ch = UNSAFE.getByte(position);
@@ -431,6 +431,7 @@ public class CalculateAverage_vaidhy<I, T> {
                 if (ch == '-') {
                     negative = true;
                     position++;
+                    ch = UNSAFE.getByte(position);
                 }
                 while (true) {
                     position++;
@@ -713,7 +714,7 @@ public class CalculateAverage_vaidhy<I, T> {
         @Override
         public void process(long keyStartAddress, long keyEndAddress, long hash, long suffix, int temperature) {
             IntSummaryStatistics entry = statistics.find(keyStartAddress, keyEndAddress, hash, suffix);
-            System.out.println(STR."\{unsafeToString(keyStartAddress, keyEndAddress)} --> \{temperature}");
+            // System.out.println(STR."\{unsafeToString(keyStartAddress, keyEndAddress)} --> \{temperature}");
             entry.accept(temperature);
         }
 

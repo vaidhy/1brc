@@ -732,7 +732,7 @@ public class CalculateAverage_vaidhy<I, T> {
                 ChunkProcessorImpl::new,
                 CalculateAverage_vaidhy::combineOutputs);
 
-        int proc = 1; // Runtime.getRuntime().availableProcessors();
+        int proc = Runtime.getRuntime().availableProcessors();
 
         ExecutorService executor = Executors.newFixedThreadPool(proc);
         Map<String, IntSummaryStatistics> output = calculateAverageVaidhy.master(2 * proc, executor);

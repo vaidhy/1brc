@@ -15,6 +15,7 @@
  */
 package dev.morling.onebrc;
 
+import jdk.incubator.vector.ByteVector;
 import sun.misc.Unsafe;
 
 import java.io.IOException;
@@ -36,120 +37,85 @@ import java.util.function.Supplier;
 
 public class CalculateAverage_vaidhy<I, T> {
 
-    private static final class HashEntry {
-        private long startAddress;
-        private long endAddress;
-        private long suffix;
-        private int next;
-        IntSummaryStatistics value;
-    }
-
     private static class PrimitiveHashMap {
-        private final HashEntry[] entries;
-        private final long[] hashes;
+        private final long[] keys;
+        private final IntSummaryStatistics[] values;
+
+        private final int[] nextIter;
 
         private final int twoPow;
+
+        private final int tableSize;
+
         private int next = -1;
 
         PrimitiveHashMap(int twoPow) {
             this.twoPow = twoPow;
-            this.entries = new HashEntry[1 << twoPow];
-            this.hashes = new long[1 << twoPow];
-            for (int i = 0; i < entries.length; i++) {
-                this.entries[i] = new HashEntry();
+            this.tableSize = 1 << twoPow;
+            this.keys = new long[tableSize * 16];
+            this.values = new IntSummaryStatistics[tableSize];
+            this.nextIter = new int[tableSize];
+
+            for (int i = 0; i < tableSize; i++) {
+                this.values[i] = new IntSummaryStatistics();
             }
         }
 
-        public HashEntry find(long startAddress, long endAddress, long hash, long suffix) {
-            int len = entries.length;
+        public IntSummaryStatistics find(long startAddress, long endAddress, long hash, long suffix) {
             int h = Long.hashCode(hash);
-            int i = (h ^ (h >> twoPow)) & (len - 1);
-            long lookupLength = endAddress - startAddress;
-
-            long hashEntry = hashes[i];
-            if (hashEntry == 0) {
-                HashEntry entry = entries[i];
-                entry.startAddress = startAddress;
-                entry.endAddress = endAddress;
-                hashes[i] = hash;
-                entry.next = next;
-                entry.suffix = suffix;
-                this.next = i;
-                return entry;
-            }
-
-            if (hashEntry == hash) {
-                HashEntry entry = entries[i];
-                if (entry.suffix == suffix) {
-                    long entryLength = entry.endAddress - entry.startAddress;
-                    if (entryLength == lookupLength) {
-                        boolean found = compareEntryKeys(startAddress, endAddress, entry);
-                        if (found) {
-                            return entry;
-                        }
-                    }
-                }
-            }
-
-            i++;
-            if (i == len) {
-                i = 0;
-            }
-
+            int i = (h ^ (h >> twoPow)) & (tableSize - 1);
+            int hashIndex = i;
+            int entryLength = (int) (endAddress - startAddress);
             do {
-                hashEntry = hashes[i];
-                if (hashEntry == 0) {
-                    HashEntry entry = entries[i];
-                    entry.startAddress = startAddress;
-                    entry.endAddress = endAddress;
-                    hashes[i] = hash;
-                    entry.next = next;
-                    entry.suffix = suffix;
-                    this.next = i;
-                    return entry;
+                int keyIndex = i << 4;
+                long keyPrefix = keys[keyIndex];
+
+                if (keyPrefix == 0) {
+                    keys[keyIndex] = hash;
+                    keys[keyIndex + 1] = entryLength;
+                    int k;
+                    int writeIndex = 2 + keyIndex;
+                    for (k = 0; k < entryLength; k += 8) {
+                        long keyValue = UNSAFE.getLong(startAddress + k);
+                        keys[writeIndex++] = keyValue;
+                    }
+                    keys[writeIndex++] = suffix;
+
+                    nextIter[i] = next;
+                    next = i;
+
+                    return this.values[i];
                 }
 
-                if (hashEntry == hash) {
-                    HashEntry entry = entries[i];
-                    if (entry.suffix == suffix) {
-                        long entryLength = entry.endAddress - entry.startAddress;
-                        if (entryLength == lookupLength) {
-                            boolean found = compareEntryKeys(startAddress, endAddress, entry);
-                            if (found) {
-                                return entry;
-                            }
-                        }
-                    }
+                if (compareEntryKeys(startAddress, endAddress, hash, suffix, keyIndex)) {
+                    return this.values[i];
                 }
+
                 i++;
-                if (i == len) {
+                if (i == tableSize) {
                     i = 0;
                 }
-            } while (i != hash);
+            } while (i != hashIndex);
+
             return null;
         }
 
-        private static boolean compareEntryKeys(long startAddress, long endAddress, HashEntry entry) {
-            long entryIndex = entry.startAddress;
+        private boolean compareEntryKeys(long startAddress, long endAddress, long suffix, long hash, int keyPrefix) {
+            int entryIndex = keyPrefix;
             long lookupIndex = startAddress;
-
+            if (keys[keyPrefix] != hash) {
+                return false;
+            }
             for (; (lookupIndex + 7) < endAddress; lookupIndex += 8) {
-                if (UNSAFE.getLong(entryIndex) != UNSAFE.getLong(lookupIndex)) {
+                if (UNSAFE.getLong(entryIndex) != keys[entryIndex]) {
                     return false;
                 }
                 entryIndex += 8;
             }
-            // for (; lookupIndex < endAddress; lookupIndex++) {
-            // if (UNSAFE.getByte(entryIndex) != UNSAFE.getByte(lookupIndex)) {
-            // return false;
-            // }
-            // entryIndex++;
-            // }
-
-            return true;
+            return keys[entryIndex] == suffix;
         }
 
-        public Iterable<HashEntry> entrySet() {
+        public Iterable<Map.Entry<String, IntSummaryStatistics>> entrySet() {
             return () -> new Iterator<>() {
                 int scan = next;
 
@@ -159,10 +125,24 @@ public class CalculateAverage_vaidhy<I, T> {
                 }
 
                 @Override
-                public HashEntry next() {
-                    HashEntry entry = entries[scan];
-                    scan = entry.next;
-                    return entry;
+                public Map.Entry<String, IntSummaryStatistics> next() {
+                    int keyIndex = scan << 4;
+                    byte[] outputArr = new byte[128];
+                    ByteBuffer buf = ByteBuffer.wrap(outputArr)
+                            .order(ByteOrder.nativeOrder());
+                    int length = (int) keys[keyIndex + 1];
+                    for (int i = 0; i < 8; i++) {
+                        buf.putLong(keys[keyIndex + 2 + i]);
+                    }
+
+                    String key = new String(outputArr, 0, length, StandardCharsets.UTF_8);
+                    IntSummaryStatistics value = values[scan];
+
+                    scan = nextIter[scan];
+
+                    return new AbstractMap.SimpleEntry<>(
+                            key,
+                            value);
                 }
             };
         }
@@ -732,14 +712,9 @@ public class CalculateAverage_vaidhy<I, T> {
 
         @Override
         public void process(long keyStartAddress, long keyEndAddress, long hash, long suffix, int temperature) {
-            HashEntry entry = statistics.find(keyStartAddress, keyEndAddress, hash, suffix);
-            if (entry == null) {
-                throw new IllegalStateException("Hash table too small :(");
-            }
-            if (entry.value == null) {
-                entry.value = new IntSummaryStatistics();
-            }
-            entry.value.accept(temperature);
+            IntSummaryStatistics entry = statistics.find(keyStartAddress, keyEndAddress, hash, suffix);
+            System.out.println(STR."\{unsafeToString(keyStartAddress, keyEndAddress)} --> \{temperature}");
+            entry.accept(temperature);
         }
 
         @Override
@@ -782,16 +757,15 @@ public class CalculateAverage_vaidhy<I, T> {
 
         Map<String, IntSummaryStatistics> output = new HashMap<>(10000);
         for (PrimitiveHashMap map : list) {
-            for (HashEntry entry : map.entrySet()) {
-                if (entry.value != null) {
-                    String keyStr = unsafeToString(entry.startAddress, entry.endAddress);
+            for (Map.Entry<String, IntSummaryStatistics> entry : map.entrySet()) {
+                if (entry.getValue() != null) {
 
-                    output.compute(keyStr, (ignore, val) -> {
+                    output.compute(entry.getKey(), (ignore, val) -> {
                         if (val == null) {
-                            return entry.value;
+                            return entry.getValue();
                         }
                         else {
-                            val.combine(entry.value);
+                            val.combine(entry.getValue());
                             return val;
                         }
                     });

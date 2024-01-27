@@ -79,7 +79,7 @@ public class CalculateAverage_vaidhy<I, T> {
                         long keyValue = UNSAFE.getLong(startAddress + k);
                         keys[writeIndex++] = keyValue;
                     }
-                    keys[writeIndex++] = suffix;
+                    keys[writeIndex] = suffix;
 
                     nextIter[i] = next;
                     next = i;
@@ -131,7 +131,7 @@ public class CalculateAverage_vaidhy<I, T> {
                     ByteBuffer buf = ByteBuffer.wrap(outputArr)
                             .order(ByteOrder.nativeOrder());
                     int length = (int) keys[keyIndex + 1];
-                    for (int i = 0; i < 8; i++) {
+                    for (int i = 0; i < 14; i++) {
                         buf.putLong(keys[keyIndex + 2 + i]);
                     }
 
@@ -423,7 +423,6 @@ public class CalculateAverage_vaidhy<I, T> {
                     position = position + 8;
                 }
             } while (true);
-            String city = unsafeToString(stationStart, stationEnd);
             int temperature = 0;
             {
                 byte ch = UNSAFE.getByte(position);
@@ -732,7 +731,7 @@ public class CalculateAverage_vaidhy<I, T> {
                 ChunkProcessorImpl::new,
                 CalculateAverage_vaidhy::combineOutputs);
 
-        int proc = Runtime.getRuntime().availableProcessors();
+        int proc = 1; // Runtime.getRuntime().availableProcessors();
 
         ExecutorService executor = Executors.newFixedThreadPool(proc);
         Map<String, IntSummaryStatistics> output = calculateAverageVaidhy.master(2 * proc, executor);

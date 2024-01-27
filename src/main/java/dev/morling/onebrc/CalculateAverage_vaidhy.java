@@ -15,7 +15,6 @@
  */
 package dev.morling.onebrc;
 
-import jdk.incubator.vector.ByteVector;
 import sun.misc.Unsafe;
 
 import java.io.IOException;
@@ -75,7 +74,7 @@ public class CalculateAverage_vaidhy<I, T> {
                     keys[keyIndex + 1] = entryLength;
                     int k;
                     int writeIndex = 2 + keyIndex;
-                    for (k = 0; k < entryLength; k += 8) {
+                    for (k = 0; k + 7 < entryLength; k += 8) {
                         long keyValue = UNSAFE.getLong(startAddress + k);
                         keys[writeIndex++] = keyValue;
                     }
@@ -100,17 +99,21 @@ public class CalculateAverage_vaidhy<I, T> {
             return null;
         }
 
-        private boolean compareEntryKeys(long startAddress, long endAddress, long suffix, long hash, int keyPrefix) {
-            int entryIndex = keyPrefix;
+        private boolean compareEntryKeys(long startAddress, long endAddress, long hash, long suffix, int keyIndex) {
+            int entryIndex = keyIndex;
             long lookupIndex = startAddress;
-            if (keys[keyPrefix] != hash) {
+            if (keys[entryIndex++] != hash) {
+                return false;
+            }
+            int entryLength = (int) keys[entryIndex++];
+            int lookupLength = (int) (endAddress - startAddress);
+            if (entryLength != lookupLength) {
                 return false;
             }
             for (; (lookupIndex + 7) < endAddress; lookupIndex += 8) {
-                if (UNSAFE.getLong(entryIndex) != keys[entryIndex]) {
+                if (UNSAFE.getLong(lookupIndex) != keys[entryIndex++]) {
                     return false;
                 }
-                entryIndex += 8;
             }
             return keys[entryIndex] == suffix;
         }

@@ -115,7 +115,23 @@ public class CalculateAverage_vaidhy<I, T> {
             if (entryLength != lookupLength) {
                 return false;
             }
-            
+
+            // @ Vaidhy, uncomment this to enable vectorized comparison!
+            // if (lookupLength > LongVector.SPECIES_PREFERRED.vectorByteSize()) {
+            // LongVector fromSegment = LongVector.fromMemorySegment(LongVector.SPECIES_PREFERRED,
+            // segment, startAddress - segment.address(), ByteOrder.nativeOrder());
+            //
+            // LongVector fromKeyStore = LongVector.fromArray(LongVector.SPECIES_PREFERRED,
+            // keys, entryIndex);
+            //
+            // if (!fromSegment.eq(fromKeyStore).allTrue()) {
+            // return false;
+            // }
+            //
+            // lookupIndex += fromSegment.byteSize();
+            // entryIndex += fromSegment.length();
+            // }
+
             for (; (lookupIndex + 7) < endAddress; lookupIndex += 8) {
                 if (UNSAFE.getLong(lookupIndex) != keys[entryIndex++]) {
                     return false;

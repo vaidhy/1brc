@@ -45,92 +45,84 @@ public class CalculateAverage_vaidhy<I, T> {
     }
 
     private static class PrimitiveHashMap {
-        private final HashEntry[] entries;
-        private final long[] hashes;
+        private final long[] hashTable;
+        // 0 - hash
+        // 1 - startAddress
+        // 2 - endAddress;
+        // 3 - suffix
+        private static final int HASH = 0;
+        private static final int START_ADDR = 1;
+        private static final int END_ADDR = 2;
+        private static final int SUFFIX = 3;
+
+        private final int[] nextIter;
+
+        private final IntSummaryStatistics[] values;
 
         private final int twoPow;
+
+        private final int tableSize;
+
         private int next = -1;
 
         PrimitiveHashMap(int twoPow) {
             this.twoPow = twoPow;
-            this.entries = new HashEntry[1 << twoPow];
-            this.hashes = new long[1 << twoPow];
-            for (int i = 0; i < entries.length; i++) {
-                this.entries[i] = new HashEntry();
+            this.tableSize = 1 << twoPow;
+            this.hashTable = new long[tableSize * 4];
+            this.values = new IntSummaryStatistics[tableSize];
+            this.nextIter = new int[tableSize];
+
+            for (int i = 0; i < tableSize; i++) {
+                this.values[i] = new IntSummaryStatistics();
             }
         }
 
-        public HashEntry find(long startAddress, long endAddress, long hash, long suffix) {
-            int len = entries.length;
+        public IntSummaryStatistics find(long startAddress, long endAddress, long hash, long suffix) {
             int h = Long.hashCode(hash);
-            int i = (h ^ (h >> twoPow)) & (len - 1);
+            int i = (h ^ (h >> twoPow)) & (tableSize - 1);
             long lookupLength = endAddress - startAddress;
 
-            long hashEntry = hashes[i];
-            if (hashEntry == 0) {
-                HashEntry entry = entries[i];
-                entry.startAddress = startAddress;
-                entry.endAddress = endAddress;
-                hashes[i] = hash;
-                entry.next = next;
-                entry.suffix = suffix;
-                this.next = i;
-                return entry;
-            }
-
-            if (hashEntry == hash) {
-                HashEntry entry = entries[i];
-                if (entry.suffix == suffix) {
-                    long entryLength = entry.endAddress - entry.startAddress;
-                    if (entryLength == lookupLength) {
-                        boolean found = compareEntryKeys(startAddress, endAddress, entry);
-                        if (found) {
-                            return entry;
-                        }
-                    }
-                }
-            }
-
-            i++;
-            if (i == len) {
-                i = 0;
-            }
-
             do {
-                hashEntry = hashes[i];
-                if (hashEntry == 0) {
-                    HashEntry entry = entries[i];
-                    entry.startAddress = startAddress;
-                    entry.endAddress = endAddress;
-                    hashes[i] = hash;
-                    entry.next = next;
-                    entry.suffix = suffix;
+                int hashIndex = i << 2;
+                long entryHash = hashTable[hashIndex + HASH];
+
+                if (entryHash == 0) {
+                    hashTable[hashIndex + HASH] = hash;
+                    hashTable[hashIndex + START_ADDR] = startAddress;
+                    hashTable[hashIndex + END_ADDR] = endAddress;
+                    hashTable[hashIndex + SUFFIX] = suffix;
+                    nextIter[i] = next;
                     this.next = i;
-                    return entry;
+                    return values[i];
                 }
 
-                if (hashEntry == hash) {
-                    HashEntry entry = entries[i];
-                    if (entry.suffix == suffix) {
-                        long entryLength = entry.endAddress - entry.startAddress;
+                if (entryHash == hash) {
+                    long entryStartAddr = hashTable[hashIndex + START_ADDR];
+                    long entryEndAddr = hashTable[hashIndex + END_ADDR];
+                    long entrySuffix = hashTable[hashIndex + SUFFIX];
+
+                    if (entrySuffix == suffix) {
+                        long entryLength = entryEndAddr - entryStartAddr;
                         if (entryLength == lookupLength) {
-                            boolean found = compareEntryKeys(startAddress, endAddress, entry);
+                            boolean found = compareEntryKeys(startAddress, endAddress, entryStartAddr);
                             if (found) {
-                                return entry;
+                                return values[i];
                             }
                         }
                     }
                 }
+
                 i++;
-                if (i == len) {
+                if (i == tableSize) {
                     i = 0;
                 }
             } while (i != hash);
-            return null;
+            throw new IllegalStateException("Hash table too small!");
         }
 
-        private static boolean compareEntryKeys(long startAddress, long endAddress, HashEntry entry) {
-            long entryIndex = entry.startAddress;
+        private static boolean compareEntryKeys(long startAddress, long endAddress,
+                                                long entryStart) {
+            long entryIndex = entryStart;
             long lookupIndex = startAddress;
 
             for (; (lookupIndex + 7) < endAddress; lookupIndex += 8) {
@@ -139,17 +131,10 @@ public class CalculateAverage_vaidhy<I, T> {
                 }
                 entryIndex += 8;
             }
-            // for (; lookupIndex < endAddress; lookupIndex++) {
-            // if (UNSAFE.getByte(entryIndex) != UNSAFE.getByte(lookupIndex)) {
-            // return false;
-            // }
-            // entryIndex++;
-            // }
-
             return true;
         }
 
-        public Iterable<HashEntry> entrySet() {
+        public Iterable<Map.Entry<String, IntSummaryStatistics>> entrySet() {
             return () -> new Iterator<>() {
                 int scan = next;
 
@@ -159,10 +144,17 @@ public class CalculateAverage_vaidhy<I, T> {
                 }
 
                 @Override
-                public HashEntry next() {
-                    HashEntry entry = entries[scan];
-                    scan = entry.next;
-                    return entry;
+                public Map.Entry<String, IntSummaryStatistics> next() {
+
+                    int hashIndex = (scan << 2);
+                    long entryStartAddr = hashTable[hashIndex + START_ADDR];
+                    long entryEndAddr = hashTable[hashIndex + END_ADDR];
+
+                    String key = unsafeToString(entryStartAddr, entryEndAddr);
+                    IntSummaryStatistics value = values[scan];
+
+                    scan = nextIter[scan];
+                    return new AbstractMap.SimpleEntry<>(key, value);
                 }
             };
         }
@@ -731,14 +723,8 @@ public class CalculateAverage_vaidhy<I, T> {
 
         @Override
         public void process(long keyStartAddress, long keyEndAddress, long hash, long suffix, int temperature) {
-            HashEntry entry = statistics.find(keyStartAddress, keyEndAddress, hash, suffix);
-            if (entry == null) {
-                throw new IllegalStateException("Hash table too small :(");
-            }
-            if (entry.value == null) {
-                entry.value = new IntSummaryStatistics();
-            }
-            entry.value.accept(temperature);
+            IntSummaryStatistics entry = statistics.find(keyStartAddress, keyEndAddress, hash, suffix);
+            entry.accept(temperature);
         }
 
         @Override
@@ -781,20 +767,16 @@ public class CalculateAverage_vaidhy<I, T> {
 
         Map<String, IntSummaryStatistics> output = new HashMap<>(10000);
         for (PrimitiveHashMap map : list) {
-            for (HashEntry entry : map.entrySet()) {
-                if (entry.value != null) {
-                    String keyStr = unsafeToString(entry.startAddress, entry.endAddress);
-
-                    output.compute(keyStr, (ignore, val) -> {
-                        if (val == null) {
-                            return entry.value;
-                        }
-                        else {
-                            val.combine(entry.value);
-                            return val;
-                        }
-                    });
-                }
+            for (Map.Entry<String, IntSummaryStatistics> entry : map.entrySet()) {
+                output.compute(entry.getKey(), (ignore, val) -> {
+                    if (val == null) {
+                        return entry.getValue();
+                    }
+                    else {
+                        val.combine(entry.getValue());
+                        return val;
+                    }
+                });
             }
         }
 

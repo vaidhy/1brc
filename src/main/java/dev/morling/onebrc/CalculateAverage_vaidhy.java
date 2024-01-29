@@ -51,10 +51,9 @@ public class CalculateAverage_vaidhy<I, T> {
         // 2 - endAddress;
         // 3 - suffix
         private static final int HASH = 0;
-        private static final int START_ADDR = 1;
-        private static final int END_ADDR = 2;
-        private static final int SUFFIX = 3;
-
+        private static final int KEY_LENGTH = 1;
+        private static final int SUFFIX = 2;
+        private static final int START_ADDR = 3;
         private final int[] nextIter;
 
         private final IntSummaryStatistics[] values;
@@ -89,7 +88,7 @@ public class CalculateAverage_vaidhy<I, T> {
                 if (entryHash == 0) {
                     hashTable[hashIndex + HASH] = hash;
                     hashTable[hashIndex + START_ADDR] = startAddress;
-                    hashTable[hashIndex + END_ADDR] = endAddress;
+                    hashTable[hashIndex + KEY_LENGTH] = lookupLength;
                     hashTable[hashIndex + SUFFIX] = suffix;
                     nextIter[i] = next;
                     this.next = i;
@@ -98,12 +97,11 @@ public class CalculateAverage_vaidhy<I, T> {
 
                 if (entryHash == hash) {
                     long entryStartAddr = hashTable[hashIndex + START_ADDR];
-                    long entryEndAddr = hashTable[hashIndex + END_ADDR];
+                    long entryKeyLength = hashTable[hashIndex + KEY_LENGTH];
                     long entrySuffix = hashTable[hashIndex + SUFFIX];
 
                     if (entrySuffix == suffix) {
-                        long entryLength = entryEndAddr - entryStartAddr;
-                        if (entryLength == lookupLength) {
+                        if (entryKeyLength == lookupLength) {
                             boolean found = compareEntryKeys(startAddress, endAddress, entryStartAddr);
                             if (found) {
                                 return values[i];
@@ -148,9 +146,9 @@ public class CalculateAverage_vaidhy<I, T> {
 
                     int hashIndex = (scan << 2);
                     long entryStartAddr = hashTable[hashIndex + START_ADDR];
-                    long entryEndAddr = hashTable[hashIndex + END_ADDR];
+                    long entryKeyLength = hashTable[hashIndex + KEY_LENGTH];
 
-                    String key = unsafeToString(entryStartAddr, entryEndAddr);
+                    String key = unsafeToString(entryStartAddr, entryStartAddr + entryKeyLength);
                     IntSummaryStatistics value = values[scan];
 
                     scan = nextIter[scan];

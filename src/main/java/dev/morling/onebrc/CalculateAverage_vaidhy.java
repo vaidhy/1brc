@@ -15,6 +15,7 @@
  */
 package dev.morling.onebrc;
 
+import jdk.incubator.vector.LongVector;
 import sun.misc.Unsafe;
 
 import java.io.IOException;
@@ -76,10 +77,45 @@ public class CalculateAverage_vaidhy<I, T> {
             }
         }
 
-        public IntSummaryStatistics find(long startAddress, long endAddress, long hash, long suffix) {
+        public IntSummaryStatistics smallFind(long startAddress, long lookupLength, long suffix) {
+            int h = Long.hashCode(suffix);
+            int initialIndex = (h ^ (h >> twoPow)) & (tableSize - 1);
+            int i = initialIndex;
+
+            do {
+                int hashIndex = i << 2;
+                long entryHash = hashTable[hashIndex + HASH];
+                long entryKeyLength = hashTable[hashIndex + KEY_LENGTH];
+
+                if (entryHash == suffix) {
+                    if (entryKeyLength == lookupLength) {
+                        return values[i];
+                    }
+                }
+
+                if (entryHash == 0) {
+                    hashTable[hashIndex + HASH] = suffix;
+                    hashTable[hashIndex + KEY_LENGTH] = lookupLength;
+                    hashTable[hashIndex + SUFFIX] = suffix;
+                    hashTable[hashIndex + START_ADDR] = startAddress;
+                    nextIter[i] = next;
+                    this.next = i;
+                    return values[i];
+                }
+
+                i++;
+                if (i == tableSize) {
+                    i = 0;
+                }
+            } while (i != initialIndex);
+            throw new IllegalStateException("Hash table too small!");
+        }
+
+        public IntSummaryStatistics bigFind(long startAddress, long lookupLength, long hash, long suffix) {
             int h = Long.hashCode(hash);
-            int i = (h ^ (h >> twoPow)) & (tableSize - 1);
-            long lookupLength = endAddress - startAddress;
+            int initialIndex = (h ^ (h >> twoPow)) & (tableSize - 1);
+            int i = initialIndex;
+            long endAddress = startAddress + lookupLength;
 
             do {
                 int hashIndex = i << 2;
@@ -100,8 +136,8 @@ public class CalculateAverage_vaidhy<I, T> {
                     long entryKeyLength = hashTable[hashIndex + KEY_LENGTH];
                     long entrySuffix = hashTable[hashIndex + SUFFIX];
 
-                    if (entrySuffix == suffix) {
-                        if (entryKeyLength == lookupLength) {
+                    if (entryKeyLength == lookupLength) {
+                        if (entrySuffix == suffix) {
                             boolean found = compareEntryKeys(startAddress, endAddress, entryStartAddr);
                             if (found) {
                                 return values[i];
@@ -114,8 +150,19 @@ public class CalculateAverage_vaidhy<I, T> {
                 if (i == tableSize) {
                     i = 0;
                 }
-            } while (i != hash);
+            } while (i != initialIndex);
             throw new IllegalStateException("Hash table too small!");
+        }
+
+        public IntSummaryStatistics find(long startAddress, long endAddress, long hash, long suffix) {
+            long lookupLength = endAddress - startAddress;
+
+            if (lookupLength <= 8) {
+                return smallFind(startAddress, lookupLength, suffix);
+            }
+            else {
+                return bigFind(startAddress, lookupLength, hash, suffix);
+            }
         }
 
         private static boolean compareEntryKeys(long startAddress, long endAddress,
